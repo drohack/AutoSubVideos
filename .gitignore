@@ -1,0 +1,10 @@
+# Ignore compiled Python files
+*.pyc
+__pycache__/
+venv3.10/
+
+# Ignore compiled binaries
+/bin/
+/build/
+/dist/
+*.spec

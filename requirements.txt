@@ -1,0 +1,12 @@
+faster_whisper==0.10.0
+moviepy==2.0.0.dev2
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch
+torchvision
+torchaudio
+tqdm==4.66.1
+transformers==4.36.1
+ffsubsync==0.4.25
+ffmpeg-python==0.2.0
+sentencepiece==0.1.99
+sacremoses==0.1.1
