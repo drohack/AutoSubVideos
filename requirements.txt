@@ -6,8 +6,9 @@ torchvision
 torchaudio
 tqdm==4.66.1
 transformers==4.36.1
-ffsubsync==0.4.25
 ffmpeg-python==0.2.0
 sentencepiece==0.1.99
 sacremoses==0.1.1
 transformers==4.36.1
+importlib_metadata==7.0.0
+wheel==0.38.4

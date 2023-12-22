@@ -25,6 +25,7 @@ from faster_whisper import WhisperModel
 
 
 device = "cpu"
+ffsubsync_path = "ffsubsync"
 
 
 def set_device(value: str):
@@ -37,6 +38,16 @@ def get_device() -> str:
     return device
 
 
+def set_ffsubsync_path(value: str):
+    global ffsubsync_path
+    ffsubsync_path = value
+
+
+def get_ffsubsync_path() -> str:
+    global ffsubsync_path
+    return ffsubsync_path
+
+
 def print_with_timestamp(message: str):
     current_time = datetime.datetime.now()
     formatted_time = current_time.strftime("[%Y-%m-%d %H:%M:%S]")
@@ -45,9 +56,10 @@ def print_with_timestamp(message: str):
 
 def check_ffmpeg():
     try:
-        # Try to run FFmpeg and check the version
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        result = subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result.check_returncode()  # This will raise a CalledProcessError if the exit code is non-zero
+    except subprocess.CalledProcessError as ex:
+        print_with_timestamp(f"Error running ffmpeg: {ex}")
         return False
     return True
 
@@ -66,13 +78,38 @@ def install_ffmpeg():
         sys.exit(1)
 
 
+'''
 def check_ffsubsync():
     try:
         # Try to run FFSubSync and check the version
-        subprocess.run(["ffsubsync", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        result = subprocess.run([get_ffsubsync_path(), "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result.check_returncode()  # This will raise a CalledProcessError if the exit code is non-zero
+    except subprocess.CalledProcessError as ex:
+        print_with_timestamp(f"Error running ffsubsync: {ex}")
+        return False
+    except Exception as ex:
+        print_with_timestamp(f"Exception running ffsubsync: {ex}")
         return False
     return True
+
+
+def get_ffsubsync_scripts_path():
+    try:
+        # Run pip show ffsubsync command and capture the output
+        result = subprocess.run(['pip', 'show', 'ffsubsync'], check=True, capture_output=True, text=True)
+
+        # Extract the location of the 'Scripts' directory from the output
+        scripts_path = None
+        for line in result.stdout.splitlines():
+            if line.startswith('Location:'):
+                _, scripts_path = line.split(':', 1)
+                scripts_path = scripts_path.strip()
+                break
+
+        return scripts_path
+    except subprocess.CalledProcessError as e:
+        print_with_timestamp(f"Error getting ffsubsync location: {e}")
+        return None
 
 
 def install_ffsubsync():
@@ -80,13 +117,29 @@ def install_ffsubsync():
 
     if system == "Windows":
         # Install FFSubSync on Windows (adjust the installation command as needed)
-        subprocess.run(["pip", "install", "ffsubsync"], check=True)
+        # subprocess.run(["pip", "install", "imageio[ffsubsync]"], check=True)
+        try:
+            # Use pip to install ffsubsync
+            subprocess.check_call(['pip', 'install', 'ffsubsync'])
+
+            # Get the 'Scripts' directory location of ffsubsync using pip show
+            set_ffsubsync_path(get_ffsubsync_scripts_path() + '/ffsubsync/fsubsync.py')
+            print_with_timestamp("ffsubsync_path: " + get_ffsubsync_path())
+
+            print_with_timestamp("ffsubsync installed successfully!")
+        except subprocess.CalledProcessError as e:
+            print_with_timestamp(f"Error installing ffsubsync: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print_with_timestamp(f"An unexpected error occurred: {e}")
+            sys.exit(1)
     elif system == "Linux":
         # Install FFSubSync on Linux (adjust the installation command as needed)
         subprocess.run(["sudo", "apt-get", "install", "-y", "ffsubsync"], check=True)
     else:
-        print("Unsupported operating system to install FFSubSync")
+        print_with_timestamp("Unsupported operating system to install FFSubSync")
         sys.exit(1)
+'''
 
 
 def check_gpu():
@@ -212,7 +265,7 @@ def synchronize_subtitles(video_file: str, input_srt_file: str) -> str:
     try:
         # Construct the FFSubSync command
         ffsubsync_command = [
-            "ffsubsync",
+            get_ffsubsync_path(),
             video_file,
             "--vad", "webrtc",
             "-i", input_srt_file,
@@ -338,10 +391,11 @@ if __name__ == '__main__':
             print("FFmpeg installed successfully, continuing application.")
         else:
             print("Failed to install FFmpeg. Please install it manually.")
-            exit(1)
+            sys.exit(1)
     else:
         print("FFmpeg is already installed, continuing application.")
 
+    '''
     # Check if FFsubsync is installed
     print_with_timestamp("Checking if ffsubsync is already installed.")
     if not check_ffsubsync():
@@ -352,9 +406,10 @@ if __name__ == '__main__':
             print("FFsubsync installed successfully, continuing application.")
         else:
             print("Failed to install FFsubsync. Please install it manually.")
-            exit(1)
+            sys.exit(1)
     else:
         print("FFsubsync is already installed, continuing application.")
+    '''
 
     # Check if the GPU is available and compatible with the version of Torch, else set to run on CPU
     check_gpu()
@@ -377,10 +432,10 @@ if __name__ == '__main__':
                 jp_subtitle_path = transcribe_audio(video_path)
 
                 # Synchronize subtitle file with video
-                synced_srt_path = synchronize_subtitles(video_file=video_path, input_srt_file=jp_subtitle_path)
+                # synced_srt_path = synchronize_subtitles(video_file=video_path, input_srt_file=jp_subtitle_path)
 
                 # Translate the synchronized subtitle file to English
-                en_subtitle_path = translate_subtitle_parallel(synced_srt_path)
+                en_subtitle_path = translate_subtitle_parallel(jp_subtitle_path)
 
                 print_with_timestamp("Create Subtitle File - Complete")
             except Exception as e:
