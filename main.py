@@ -419,7 +419,7 @@ if __name__ == '__main__':
     root.withdraw()  # prevents an empty tkinter window from appearing
     paths = filedialog.askopenfilenames(
         title="Select video file(s)",
-        filetypes=[("Video files", ('.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.mpeg', '.mpg'))],
+        filetypes=[("Video files", ('.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.mpeg', '.mpg', 'm4v'))],
     )
 
     # Check to see if the video file or path exists
