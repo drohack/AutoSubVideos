@@ -10,7 +10,6 @@ import re
 
 import easyocr  # https://www.jaided.ai/easyocr/documentation/
 import math
-
 import cv2
 import numpy as np
 from PIL import Image
