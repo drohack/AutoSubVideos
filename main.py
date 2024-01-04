@@ -812,7 +812,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # Loop through final_text_box_array and create an .srt file
     directory_path = os.path.dirname(video_file_path)
     final_subtitle_path = (directory_path + "/" + os.path.splitext(os.path.basename(video_file_path))[0]
-                           + ".final.en-ai.ass")
+                           + ".final.en.ass")
     create_empty_srt_file(final_subtitle_path)
     # Write translated lines to the output SRT file
     with open(final_subtitle_path, 'w', encoding='utf-8') as f:
