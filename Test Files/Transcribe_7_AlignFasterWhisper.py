@@ -8,6 +8,9 @@ from tkinter import filedialog
 from moviepy.editor import VideoFileClip
 from faster_whisper import WhisperModel
 
+from df.enhance import enhance, init_df, load_audio, save_audio
+import subprocess
+
 
 def print_with_timestamp(message):
     current_time = datetime.datetime.now()
@@ -47,10 +50,11 @@ def transcribe_audio(audio_file_path):
                                       word_timestamps=True, condition_on_previous_text=False,
                                       no_speech_threshold=0.1
                                       )
-    print_with_timestamp("End whisper")
+    print_with_timestamp("End Load whisper")
 
     #print(torch.cuda.is_available())
 
+    print_with_timestamp("Start transcribe")
     transcribed_str = ""
     with tqdm(total=None) as pbar:
         for segment in segments:
@@ -70,12 +74,33 @@ def transcribe_audio(audio_file_path):
             transcribed_str += line
             pbar.update()
 
+    print_with_timestamp("End transcribe_audio()")
     return transcribed_str
 
 
 def create_empty_srt_file(file_path):
     with open(file_path, "w", encoding="utf-8") as file:
         file.write("")
+
+
+def align_text_audio(text, temp_text_path, audio_file_path, output_path):
+    # Get only the text lines, every 4th line starting at the 3rd line
+    text_lines = text[2::4]
+    # Write text to temporary file
+    with open(temp_text_path, "w", encoding="utf-8") as text_file:
+        text_file.write(text_lines)
+
+    aeneas_cmd = [
+        "python",            # Use the Python interpreter
+        "-m", "aeneas.tools.execute_task",  # Module for executing Aeneas task
+        temp_text_path,      # Path to the text file
+        audio_file_path,     # Path to the audio file
+        "task_language=ja|is_text_type=plain",
+        output_path  # Output file for sync map
+    ]
+
+    # Run the Aeneas command as a subprocess
+    subprocess.run(aeneas_cmd)
 
 
 # Define the path to the video file
@@ -105,11 +130,19 @@ try:
     # Generate .srt file from audio file
     transcribed_audio = transcribe_audio(temp_audio_file_path)
 
+    '''
+    output_path = os.path.dirname(video_path) + "/" + os.path.splitext(os.path.basename(video_path))[0] + ".sync.txt"
+    create_empty_srt_file(output_path)
+    aligned_audio = align_text_audio(transcribed_audio, os.path.join(temp_dir, "temp_text.txt"), temp_audio_file_path, output_path)
+    '''
+
+    '''
     # Write transcription to .srt file
     directory_path = os.path.dirname(video_path)
-    jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0] + ".faster_whisper.jp.srt"
+    jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0] + ".faster_whisper.test-jp.srt"
     with open(jp_subtitle_path, "w", encoding="utf-8") as srt_file:
         srt_file.write(transcribed_audio)
+    '''
 
     '''
     # Synchronize subtitle file with video

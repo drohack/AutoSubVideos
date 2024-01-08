@@ -8,6 +8,9 @@ from tkinter import filedialog
 from moviepy.editor import VideoFileClip
 from faster_whisper import WhisperModel
 
+import torch
+from df.enhance import enhance, init_df, load_audio, save_audio  #https://github.com/Rikorose/DeepFilterNet
+
 
 def print_with_timestamp(message):
     current_time = datetime.datetime.now()
@@ -47,10 +50,11 @@ def transcribe_audio(audio_file_path):
                                       word_timestamps=True, condition_on_previous_text=False,
                                       no_speech_threshold=0.1
                                       )
-    print_with_timestamp("End whisper")
+    print_with_timestamp("End Load whisper")
 
     #print(torch.cuda.is_available())
 
+    print_with_timestamp("Start transcribe")
     transcribed_str = ""
     with tqdm(total=None) as pbar:
         for segment in segments:
@@ -70,6 +74,7 @@ def transcribe_audio(audio_file_path):
             transcribed_str += line
             pbar.update()
 
+    print_with_timestamp("End transcribe_audio()")
     return transcribed_str
 
 
@@ -97,17 +102,34 @@ video_clip = VideoFileClip(video_path)
 # Extract audio and save it as a temporary audio file
 audio_clip = video_clip.audio
 try:
+    # Set the desired sample rate (fps) to 48000
+    desired_sample_rate = 48000
+
+    # Resample the audio to the desired sample rate
+    resampled_audio = audio_clip.set_frame_rate(desired_sample_rate)
+
     ffmpeg_params = ["-ac", "1"]
-    audio_clip.write_audiofile(temp_audio_file_path, ffmpeg_params=ffmpeg_params)
+    resampled_audio.write_audiofile(temp_audio_file_path, ffmpeg_params=ffmpeg_params)
 
     print_with_timestamp("Temporary audio file saved:" + temp_audio_file_path)
 
+    print_with_timestamp("Reduce audio start")
+    reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
+    df_model, df_state, _ = init_df()
+    audio, _ = load_audio(temp_audio_file_path, sr=df_state.sr())
+    enhanced = enhance(df_model, df_state, audio, atten_lim_db=6)
+    # Save for listening
+    save_audio(reduce_audio_file_path, enhanced, df_state.sr())
+    # Clear GPU memory
+    torch.cuda.empty_cache()
+    print_with_timestamp("Reduce audio end")
+
     # Generate .srt file from audio file
-    transcribed_audio = transcribe_audio(temp_audio_file_path)
+    transcribed_audio = transcribe_audio(reduce_audio_file_path)
 
     # Write transcription to .srt file
     directory_path = os.path.dirname(video_path)
-    jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0] + ".faster_whisper.jp.srt"
+    jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0] + ".faster_whisper.test-jp.srt"
     with open(jp_subtitle_path, "w", encoding="utf-8") as srt_file:
         srt_file.write(transcribed_audio)
 

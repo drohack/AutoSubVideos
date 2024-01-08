@@ -22,6 +22,7 @@ from tqdm import tqdm
 from tkinter import filedialog
 from moviepy.editor import VideoFileClip
 from faster_whisper import WhisperModel
+from pydub.utils import mediainfo
 
 import re
 import math
@@ -220,8 +221,11 @@ def transcribe_audio(video_path: str) -> str:
     # Define the path for the temporary audio file
     temp_audio_file_path = os.path.join(temp_dir, "temp_audio.wav")
 
+    # Get the correct audio sample rate to extract the audio correctly
+    audio_info = mediainfo(video_path)['sample_rate']
+
     # Load the video clip
-    video_clip = VideoFileClip(video_path)
+    video_clip = VideoFileClip(video_path, audio_fps=int(audio_info))
 
     # Extract audio and save it as a temporary audio file
     audio_clip = video_clip.audio
