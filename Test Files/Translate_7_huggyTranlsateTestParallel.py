@@ -51,6 +51,9 @@ def translate_subtitle_parallel(subtitle_file, output_file_path):
     # Get only the text lines, every 4th line starting at the 3rd line
     text_lines = subtitle_lines[2::4]
 
+    for line in text_lines:
+        line = clean_up_line(line)
+
     # Initialize concurrent futures executor
     num_workers = 4  # Number of parallel workers
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -80,13 +83,14 @@ def create_empty_srt_file(file_path):
 
 # Define the path to the video file
 tkinter.Tk().withdraw()  # prevents an empty tkinter window from appearing
-sub_path = filedialog.askopenfilename()
+sub_paths = filedialog.askopenfilenames()
 
-print("Translating subtitle file for: " + sub_path)
+for sub_path in sub_paths:
+    print("Translating subtitle file for: " + sub_path)
 
-directory_path = os.path.dirname(sub_path)
-en_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(sub_path))[0] + ".huggy.srt"
-create_empty_srt_file(en_subtitle_path)
-translate_subtitle_parallel(sub_path, en_subtitle_path)
+    directory_path = os.path.dirname(sub_path)
+    en_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(sub_path))[0] + ".huggy.en.srt"
+    create_empty_srt_file(en_subtitle_path)
+    translate_subtitle_parallel(sub_path, en_subtitle_path)
 
-print("Translation complete. Translated SRT file:", en_subtitle_path)
+    print("Translation complete. Translated SRT file:", en_subtitle_path)

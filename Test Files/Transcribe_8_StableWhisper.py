@@ -41,14 +41,11 @@ def transcribe_audio(audio_file_path, output_srt_path):
             pbar.update()
     '''
     # Transcribe with stable_whisper
-    model = stable_whisper.load_model("large-v3", device="cuda")
     model = stable_whisper.load_faster_whisper("large-v3", device="cuda", compute_type="auto", num_workers=2)
-    #result = model.transcribe(audio=audio_file_path, beam_size=5, language='ja', temperature=0,
-    #                          word_timestamps=True, condition_on_previous_text=False, no_speech_threshold=0.1,
-    #                          ts_num=5, ts_noise=0.2)
     result: WhisperResult = model.transcribe_stable(audio=audio_file_path, beam_size=1, language='ja', temperature=0,
-                                     word_timestamps=True, condition_on_previous_text=False, no_speech_threshold=0.1,
-                                     )
+                                                    word_timestamps=True, condition_on_previous_text=False,
+                                                    no_speech_threshold=0.1,
+                                                    )
     print_with_timestamp("End whisper")
 
     # Offset all timings by 1 second
@@ -114,7 +111,7 @@ try:
 
     print_with_timestamp("Temporary audio file saved:" + temp_audio_file_path)
 
-    '''
+
     print_with_timestamp("Reduce audio start")
     reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
     df_model, df_state, _ = init_df()
@@ -125,13 +122,13 @@ try:
     # Clear GPU memory
     torch.cuda.empty_cache()
     print_with_timestamp("Reduce audio end")
-    '''
+
 
     directory_path = os.path.dirname(video_path)
     jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0]
 
     # Generate .srt file from audio file
-    transcribe_audio(temp_audio_file_path, jp_subtitle_path)
+    transcribe_audio(reduce_audio_file_path, jp_subtitle_path)
 
     '''
     # Write transcription to .srt file
