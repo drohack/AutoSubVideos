@@ -16,13 +16,16 @@ import torch
 import traceback
 import platform
 import sys
-from datetime import timedelta
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from tqdm import tqdm
 from tkinter import filedialog
 from moviepy.editor import VideoFileClip
-from faster_whisper import WhisperModel
+from df.enhance import enhance, init_df, load_audio, save_audio  #https://github.com/Rikorose/DeepFilterNet
+import stable_whisper
+from stable_whisper import WhisperResult
 from pydub.utils import mediainfo
+import pysrt
+from pysrt import SubRipFile
 
 import re
 import math
@@ -213,7 +216,7 @@ def transcribe_audio(video_path: str) -> str:
     # Create jp_subtitle_path
     directory_path = os.path.dirname(video_path)
     jp_subtitle_path = (directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0]
-                        + ".faster_whisper.jp.srt")
+                        + ".stable_faster_whisper.jp.srt")
 
     # Create a temporary directories
     temp_dir = tempfile.mkdtemp()
@@ -235,50 +238,42 @@ def transcribe_audio(video_path: str) -> str:
 
         print_with_timestamp("Temporary audio file saved:" + temp_audio_file_path)
 
+        # Reduce background noise uisng DeepFilterNet
+        print_with_timestamp("Reduce audio start")
+        reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
+        df_model, df_state, _ = init_df()
+        audio, _ = load_audio(temp_audio_file_path, sr=df_state.sr())
+        enhanced = enhance(df_model, df_state, audio, atten_lim_db=6)
+        # Save for listening
+        save_audio(reduce_audio_file_path, enhanced, df_state.sr())
+        # Clear GPU memory
+        torch.cuda.empty_cache()
+        print_with_timestamp("Reduce audio end")
+
         # Transcribe with faster_whisper
         # Run on GPU
-        print_with_timestamp("Load Faster Whisper")
-        model = WhisperModel("large-v3", device=get_device(), compute_type="auto", num_workers=5)
-        segments, info = model.transcribe(audio=temp_audio_file_path, beam_size=1, language='ja', temperature=0,
-                                          word_timestamps=True, condition_on_previous_text=False,
-                                          no_speech_threshold=0.1,
-                                          # ,vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500),
-                                          )
-        print_with_timestamp("Faster Whisper loaded")
+        print_with_timestamp("Transcribe with Stable Faster Whisper")
+        model = stable_whisper.load_faster_whisper("large-v3", device=get_device(), compute_type="auto", num_workers=2)
+        result: WhisperResult = model.transcribe_stable(audio=reduce_audio_file_path, beam_size=1, language='ja',
+                                                        temperature=0, word_timestamps=True,
+                                                        condition_on_previous_text=False, no_speech_threshold=0.1,
+                                                        )
+        print_with_timestamp("Transcribe complete")
 
-        print_with_timestamp("Transcribe audio")
-        transcribed_str = ""
-        with (tqdm(total=None) as pbar):
-            for segment in segments:
-                # Convert seconds to timedelta
-                start_delta = timedelta(seconds=segment.start)
-                start_hours, start_remainder = divmod(start_delta.seconds, 3600)
-                start_minutes, start_seconds = divmod(start_remainder, 60)
-                start_milliseconds = start_delta.microseconds // 1000
-                start_time = "{:02}:{:02}:{:02},{:03}".format(start_hours, start_minutes, start_seconds,
-                                                              start_milliseconds)
-                end_delta = timedelta(seconds=segment.end)
-                end_hours, end_remainder = divmod(end_delta.seconds, 3600)
-                end_minutes, end_seconds = divmod(end_remainder, 60)
-                end_milliseconds = end_delta.microseconds // 1000
-                if float(segment.start) == float(segment.end):
-                    end_time = "{:02}:{:02}:{:02},{:03}".format(end_hours, end_minutes, end_seconds,
-                                                                end_milliseconds + 0.5)
-                else:
-                    end_time = "{:02}:{:02}:{:02},{:03}".format(end_hours, end_minutes, end_seconds,
-                                                                end_milliseconds)
-                line = "%d\n%s --> %s\n%s\n\n" % (segment.id, start_time, end_time, segment.text)
-                transcribed_str += line
-                pbar.update()
+        # TODO: Figure out why my audio always has a 1 second de-sync
+        # Offset all timings by 1 second
+        result.offset_time(1.0)
 
-        # Write transcription to .srt file
-        with open(jp_subtitle_path, "w", encoding="utf-8") as srt_file:
-            srt_file.write(transcribed_str)
+        # result.to_srt_vtt(output_srt_path + ".stable_whisper.stable-jp-faster-reduce.srt")
+        result.to_srt_vtt(jp_subtitle_path, word_level=False)
     except Exception as e:
         print_with_timestamp(f"Error - transcribe_audio(): {e}")
         traceback.print_exc()
         raise e
     finally:
+        # Clear GPU memory
+        torch.cuda.empty_cache()
+
         # Close the video and audio clips
         video_clip.close()
         audio_clip.close()
@@ -349,16 +344,17 @@ def clean_up_line(line: str) -> str:
     return line
 
 
-def translate_line(line: str, tokenizer, model, device, pbar) -> str:
-    encoded_text = tokenizer(line, return_tensors="pt")
+def translate_line(sub, tokenizer, model, device, pbar) -> str:
+    encoded_text = tokenizer(sub.text, return_tensors="pt")
     # Run on GPU if available
     encoded_text = encoded_text.to(device)
 
     translated_text = model.generate(**encoded_text)[0]
     translated_sentence = tokenizer.decode(translated_text, skip_special_tokens=True)
+    sub.text = translated_sentence
 
     pbar.update(1)
-    return translated_sentence
+    return sub
 
 
 def update_pbar(pbar):
@@ -369,9 +365,8 @@ def translate_subtitle_parallel(input_subtitle_path: str) -> str:
     print_with_timestamp("Start translate_subtitle_parallel(" + input_subtitle_path + ")")
 
     directory_path = os.path.dirname(input_subtitle_path)
-    en_subtitle_path = (directory_path + "/" + os.path.splitext(os.path.basename(input_subtitle_path))[0]
+    en_subtitle_path = (directory_path + "/" + os.path.splitext(os.path.basename(input_subtitle_path))[0].replace('.jp', '')
                         + ".huggy.en.srt")
-    create_empty_srt_file(en_subtitle_path)
 
     try:
         # Choose a model for Japanese to English translation
@@ -384,33 +379,18 @@ def translate_subtitle_parallel(input_subtitle_path: str) -> str:
         model = model.to(get_device())
 
         # Read subtitle file
-        with open(input_subtitle_path, 'r', encoding='utf-8') as file:
-            subtitle_lines = file.readlines()
-
-        # Get only the text lines, every 4th line starting at the 3rd line
-        text_lines = subtitle_lines[2::4]
+        subs = pysrt.open(input_subtitle_path)
 
         # Initialize concurrent futures executor
         num_workers = 4  # Number of parallel workers
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            translated_lines = []
-
             # Create a tqdm progress bar to track the number of translated lines
-            with tqdm(total=len(text_lines), unit="line", position=0, leave=True) as pbar:
+            with tqdm(total=len(subs), unit="line", position=0, leave=True) as pbar:
                 # Use ThreadPoolExecutor.map to process tasks in order
-                translated_lines = list(executor.map(lambda line: translate_line(line, tokenizer, model, get_device(), pbar),
-                                                     text_lines))
+                list(executor.map(lambda sub: translate_line(sub, tokenizer, model, device, pbar), subs))
 
-        # Replace the japanese lines with the translated lines (this keeps the index, and timestamps)
-        subtitle_lines[2::4] = translated_lines
-
-        # Write translated lines to the output SRT file
-        with open(en_subtitle_path, 'w', encoding='utf-8') as f:
-            for line in subtitle_lines:
-                if line.endswith('\n'):
-                    f.write(line)
-                else:
-                    f.write(line + '\n')
+        # Save the filtered subtitles to a new SRT file
+        subs.save(en_subtitle_path, encoding='utf-8')
     except Exception as e:
         print_with_timestamp(f"Error - translate_subtitle_parallel(): {e}")
         traceback.print_exc()
@@ -756,11 +736,6 @@ def ocr_video(video_file_path):
         elif len(text_box[3]) > 9:
             final_text_box_array[i][3] = keep_first_three_occurrences(text_box[3])
 
-    '''
-    for text_box in final_text_box_array:
-        print_with_timestamp(text_box)
-    '''
-
     print_with_timestamp("End ocr_video()")
     return final_text_box_array
 
@@ -769,27 +744,19 @@ def combine_and_write_to_ass_file(video_file_path, sub_file_path, ocr_data):
     print_with_timestamp("Start combine_and_write_to_ass_file(" + video_file_path + ", " + sub_file_path + ", ocr_data)")
 
     # Read subtitle file
-    with open(sub_file_path, 'r', encoding='utf-8') as file:
-        subtitle_lines = file.readlines()
+    subs = pysrt.open(sub_file_path)
 
     # Convert to ocr_data format [start_time, end_time, box, text]
     srt_data = []
-    i = 1  # skip first line
-    while i < len(subtitle_lines):
+    for sub in subs:
         #print_with_timestamp(subtitle_lines[i])
         # Get start and end time
-        time = subtitle_lines[i].replace('\n', '')
-        times = time.split(" --> ")
-        start_time = times[0].replace(',', '.')[:-1]
-        end_time = times[1].replace(',', '.')[:-1]
-        # Go to next line
-        i += 1
-        text = subtitle_lines[i]
+        start_time = str(sub.start).split(',')[0] + '.' + str(round(float(subs[0].start.milliseconds) / 10))
+        end_time = str(sub.end).split(',')[0] + '.' + str(round(float(subs[0].end.milliseconds) / 10))
+        text = sub.text
         # create subtitle_data
         data = [start_time, end_time, None, text]
         srt_data.append(data)
-        # skip the blank line and index to go to the next line with time
-        i += 3
 
     # Combine the srt_data and ocr_data
     combined_subtitle_data = srt_data + ocr_data
@@ -863,7 +830,7 @@ if __name__ == '__main__':
     else:
         print_with_timestamp("FFmpeg is already installed, continuing application.")
 
-
+    '''
     # Check if FFsubsync is installed
     print_with_timestamp("Checking if ffsubsync is already installed.")
     if not check_ffsubsync():
@@ -877,7 +844,7 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         print_with_timestamp("FFsubsync is already installed, continuing application.")
-
+    '''
 
     # Check if the GPU is available and compatible with the version of Torch, else set to run on CPU
     check_gpu()
@@ -900,10 +867,10 @@ if __name__ == '__main__':
                 jp_subtitle_path = transcribe_audio(video_path)
 
                 # Synchronize subtitle file with video
-                synced_srt_path = synchronize_subtitles(video_file=video_path, input_srt_file=jp_subtitle_path)
+                #synced_srt_path = synchronize_subtitles(video_file=video_path, input_srt_file=jp_subtitle_path)
 
                 # Translate the synchronized subtitle file to English
-                en_subtitle_path = translate_subtitle_parallel(synced_srt_path)
+                en_subtitle_path = translate_subtitle_parallel(jp_subtitle_path)
 
                 # Get the OCR object to merge into the final subtitle file
                 ocr_data = ocr_video(video_path)
