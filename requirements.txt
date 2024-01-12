@@ -23,4 +23,4 @@ requests==2.31.0
 opencv-python==4.9.0.80
 pydub==0.25.1
 deepfilternet==0.5.6
-jiwer==2.3.0
+jiwer==3.0.3

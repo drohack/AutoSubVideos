@@ -41,41 +41,42 @@ def ocr_video(video_file_path):
 
         # Make sure the frame exists
         if ret:
-            # Run EasyOCR on frame
-            results = reader.readtext(frame, paragraph=True)
+            if i % 6 == 0:  # process every 6 frames
+                # Run EasyOCR on frame
+                results = reader.readtext(frame, paragraph=True)
 
-            # Loop through each text output and add it to an array
-            frame_result_array = []
-            for result in results:
-                box = result[0]
-                text = result[1]
-                # confidence = result[2]
-                confidence = 1
-                if len(text) > 2 and confidence > RESULT_CONFIDENCE:
-                    frame_result_array.append(result)
+                # Loop through each text output and add it to an array
+                frame_result_array = []
+                for result in results:
+                    box = result[0]
+                    text = result[1]
+                    # confidence = result[2]
+                    confidence = 1
+                    if len(text) > 2 and confidence > RESULT_CONFIDENCE:
+                        frame_result_array.append(result)
 
-            # Add the Frame and EasyOCR Reader results in step so the indexes are synced
-            frames.append(i)
-            reader_output.append(frame_result_array)
+                # Add the Frame and EasyOCR Reader results in step so the indexes are synced
+                frames.append(i)
+                reader_output.append(frame_result_array)
 
-            if len(frame_result_array) > 0:
-                print(frame_result_array)
+                if len(frame_result_array) > 0:
+                    print(frame_result_array)
+
+                for result in results:
+                    text = result[1]
+                    box = result[0]
+
+                    # Ensure integer coordinates for rectangle
+                    box[0] = tuple(map(int, box[0]))
+                    box[2] = tuple(map(int, box[2]))
+
+                    # Draw rectangle and text
+                    cv2.rectangle(frame, box[0], box[2], (0, 255, 0), 2)
+                    cv2.putText(frame, text, (box[0][0], box[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+                cv2.imshow("Text Detection", frame)
 
             i += 1  # increase the frame number
-
-            for result in results:
-                text = result[1]
-                box = result[0]
-
-                # Ensure integer coordinates for rectangle
-                box[0] = tuple(map(int, box[0]))
-                box[2] = tuple(map(int, box[2]))
-
-                # Draw rectangle and text
-                cv2.rectangle(frame, box[0], box[2], (0, 255, 0), 2)
-                cv2.putText(frame, text, (box[0][0], box[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-            cv2.imshow("Text Detection", frame)
 
             # Wait until the "q" key is pressed
             if cv2.waitKey(1) == ord("q"):

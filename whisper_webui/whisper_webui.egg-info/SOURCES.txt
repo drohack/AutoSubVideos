@@ -1,0 +1,17 @@
+LICENSE.md
+README.md
+setup.py
+src/__init__.py
+src/config.py
+src/download.py
+src/languages.py
+src/modelCache.py
+src/segments.py
+src/source.py
+src/utils.py
+src/vad.py
+src/vadParallel.py
+whisper_webui.egg-info/PKG-INFO
+whisper_webui.egg-info/SOURCES.txt
+whisper_webui.egg-info/dependency_links.txt
+whisper_webui.egg-info/top_level.txt

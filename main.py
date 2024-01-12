@@ -16,16 +16,23 @@ import torch
 import traceback
 import platform
 import sys
+import time
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from tqdm import tqdm
 from tkinter import filedialog
-from moviepy.editor import VideoFileClip
 from df.enhance import enhance, init_df, load_audio, save_audio  #https://github.com/Rikorose/DeepFilterNet
-import stable_whisper
-from stable_whisper import WhisperResult
+from pydub import AudioSegment
 from pydub.utils import mediainfo
 import pysrt
 from pysrt import SubRipFile
+
+import stable_whisper
+from stable_whisper import WhisperResult
+from multiprocessing import Process
+# https://gitlab.com/aadnk/whisper-webui
+from whisper_webui.src.config import ModelConfig
+from whisper_webui.src.whisper.fasterWhisperContainer import FasterWhisperContainer
+from whisper_webui.app import WhisperTranscriber, VadOptions
 
 import re
 import math
@@ -37,6 +44,8 @@ from PIL import Image
 from manga_ocr import MangaOcr  # https://github.com/kha-white/manga-ocr
 import jellyfish as jf
 
+
+REDUCE_AUDIO = False
 
 RESULT_CONFIDENCE = 0.0
 JELLYFISH_ACCURACY = 0.5        # From 0 to 1, how close 2 lines of text have to be to be considered the same string
@@ -210,14 +219,7 @@ def check_gpu():
         print_with_timestamp("No GPU available. PyTorch is running on CPU.")
 
 
-def transcribe_audio(video_path: str) -> str:
-    print_with_timestamp("Start transcribe_audio(" + video_path + ")")
-
-    # Create jp_subtitle_path
-    directory_path = os.path.dirname(video_path)
-    jp_subtitle_path = (directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0]
-                        + ".stable_faster_whisper.jp.srt")
-
+def transcribe_audio_subprocess(directory_path, video_path, jp_filename):
     # Create a temporary directories
     temp_dir = tempfile.mkdtemp()
 
@@ -225,36 +227,41 @@ def transcribe_audio(video_path: str) -> str:
     temp_audio_file_path = os.path.join(temp_dir, "temp_audio.wav")
 
     # Get the correct audio sample rate to extract the audio correctly
-    audio_info = mediainfo(video_path)['sample_rate']
+    input_sr = mediainfo(video_path)['sample_rate']
 
-    # Load the video clip
-    video_clip = VideoFileClip(video_path, audio_fps=int(audio_info))
+    # Load the video's audio
+    audio_clip = AudioSegment.from_file(video_path)
 
-    # Extract audio and save it as a temporary audio file
-    audio_clip = video_clip.audio
+    # Set channels=1 to convert to mono
+    mono_audio = audio_clip.set_channels(1)
     try:
+        # Export the mono audio to a WAV file
         ffmpeg_params = ["-ac", "1"]
-        audio_clip.write_audiofile(temp_audio_file_path, ffmpeg_params=ffmpeg_params)
+        mono_audio.export(temp_audio_file_path, format='wav', parameters=ffmpeg_params)
+        audio_file_path = temp_audio_file_path
 
         print_with_timestamp("Temporary audio file saved:" + temp_audio_file_path)
 
-        # Reduce background noise uisng DeepFilterNet
-        print_with_timestamp("Reduce audio start")
-        reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
-        df_model, df_state, _ = init_df()
-        audio, _ = load_audio(temp_audio_file_path, sr=df_state.sr())
-        enhanced = enhance(df_model, df_state, audio, atten_lim_db=6)
-        # Save for listening
-        save_audio(reduce_audio_file_path, enhanced, df_state.sr())
-        # Clear GPU memory
-        torch.cuda.empty_cache()
-        print_with_timestamp("Reduce audio end")
+        if REDUCE_AUDIO:
+            # Reduce background noise uisng DeepFilterNet
+            print_with_timestamp("Reduce audio start")
+            reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
+            df_model, df_state, _ = init_df()
+            audio, _ = load_audio(temp_audio_file_path, sr=df_state.sr())
+            enhanced = enhance(df_model, df_state, audio, atten_lim_db=6)
+            # Save for listening
+            save_audio(reduce_audio_file_path, enhanced, df_state.sr())
+            # Clear GPU memory
+            torch.cuda.empty_cache()
+            audio_file_path = reduce_audio_file_path
+            print_with_timestamp("Reduce audio end")
 
+        '''
         # Transcribe with faster_whisper
         # Run on GPU
         print_with_timestamp("Transcribe with Stable Faster Whisper")
         model = stable_whisper.load_faster_whisper("large-v3", device=get_device(), compute_type="auto", num_workers=2)
-        result: WhisperResult = model.transcribe_stable(audio=reduce_audio_file_path, beam_size=1, language='ja',
+        result: WhisperResult = model.transcribe_stable(audio=audio_file_path, beam_size=1, language='ja',
                                                         temperature=0, word_timestamps=True,
                                                         condition_on_previous_text=False, no_speech_threshold=0.1,
                                                         )
@@ -262,10 +269,48 @@ def transcribe_audio(video_path: str) -> str:
 
         # TODO: Figure out why my audio always has a 1 second de-sync
         # Offset all timings by 1 second
-        result.offset_time(1.0)
+        # result.offset_time(1.0)
 
         # result.to_srt_vtt(output_srt_path + ".stable_whisper.stable-jp-faster-reduce.srt")
         result.to_srt_vtt(jp_subtitle_path, word_level=False)
+        '''
+
+        # Transcribe with Whisper Webui + Stable-ts + Faster Whisper
+        data_models = [
+            {
+                "name": "medium",
+                "url": "medium"
+            },
+            {
+                "name": "large-v3",
+                "url": "large-v3"
+            }
+        ]
+
+        models = [ModelConfig(**x) for x in data_models]
+
+        model = FasterWhisperContainer(model_name='large-v3', device='cuda', compute_type='auto', models=models)
+        model.ensure_downloaded()
+        vad_options = VadOptions(vad='silero-vad', vadMergeWindow=5, vadMaxMergeSize=180,
+                                 vadPadding=1, vadPromptWindow=1)
+        wwebui = WhisperTranscriber()
+        # Record the start time
+        start_time = time.time()
+        result = wwebui.transcribe_file(model=model, audio_path=audio_file_path, language='Japanese', task='transcribe',
+                                        vadOptions=vad_options, input_sr=int(input_sr),
+                                        beam_size=5,
+                                        word_timestamps=True, condition_on_previous_text=True,
+                                        no_speech_threshold=0.35,
+                                        )
+        # Record the end time
+        end_time = time.time()
+
+        # Calculate and display the elapsed time
+        elapsed_time = end_time - start_time
+        print(f"WebUI Transcribe Stable Faster Whisper elapsed time: {elapsed_time} seconds")
+
+        source_download, source_text = wwebui.write_srt(result, output_filename=jp_filename,
+                                                        output_dir=directory_path, highlight_words=False)
     except Exception as e:
         print_with_timestamp(f"Error - transcribe_audio(): {e}")
         traceback.print_exc()
@@ -275,11 +320,32 @@ def transcribe_audio(video_path: str) -> str:
         torch.cuda.empty_cache()
 
         # Close the video and audio clips
-        video_clip.close()
-        audio_clip.close()
+        # video_clip.close()
+        # audio_clip.close()
 
         # Clean up: Delete the temporary directory and its contents
         shutil.rmtree(temp_dir)
+
+
+def transcribe_audio(video_path: str) -> str:
+    print_with_timestamp("Start transcribe_audio(" + video_path + ")")
+
+    # Create jp_subtitle_path
+    directory_path = os.path.dirname(video_path)
+    jp_filename = os.path.splitext(os.path.basename(video_path))[0] + ".wwebui_stable_faster_whisper.jp.srt"
+    jp_subtitle_path = (directory_path + "/" + jp_filename)
+
+    try:
+        p = Process(target=transcribe_audio_subprocess, args=[directory_path, video_path, jp_filename])
+        print_with_timestamp("star subprocess")
+        p.start()
+        print_with_timestamp("wait for subprocess to finish")
+        p.join()
+        # p.close()
+        print_with_timestamp("subprocess finished")
+    except Exception as e:
+        print_with_timestamp(f"An exception occurred: {e}")
+        traceback.print_exc()
 
     print_with_timestamp("End transcribe_audio: " + jp_subtitle_path)
 
@@ -549,11 +615,11 @@ def ocr_video(video_file_path):
 
             # Make sure the frame exists
             if ret:
-                if i % 3 == 0:  # process every 3 frames
+                if i % 6 == 0:  # process every 6 frames
                     # Grayscale the image for easier processing
                     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     # Run EasyOCR on frame
-                    results = reader.readtext(gray_frame, paragraph=False, min_size=200)
+                    results = reader.readtext(gray_frame, paragraph=False, min_size=20)
                     frame_result_array = []
                     # Loop through each text box on the frame, and run MangaOCR on it to get better text
                     for result in results:
@@ -759,7 +825,10 @@ def combine_and_write_to_ass_file(video_file_path, sub_file_path, ocr_data):
         srt_data.append(data)
 
     # Combine the srt_data and ocr_data
-    combined_subtitle_data = srt_data + ocr_data
+    if ocr_data is not None and len(ocr_data) > 0:
+        combined_subtitle_data = srt_data + ocr_data
+    else:
+        combined_subtitle_data = srt_data
 
     # Sort the array based on the first item of each sub-array
     subtitle_data = sorted(combined_subtitle_data, key=lambda x: x[0])
@@ -773,8 +842,8 @@ PlayDepth: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Helvetica,16,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
-Style: Text_Box,Helvetica,10,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,0,2,10,10,10,1
+Style: Default,Helvetica,16,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,10,1
+Style: Text_Box,Helvetica,10,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,10,10,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -852,6 +921,7 @@ if __name__ == '__main__':
     # Define the path to the video file
     root = tkinter.Tk()
     root.withdraw()  # prevents an empty tkinter window from appearing
+    print_with_timestamp("Select video file(s) to transcribe/translate")
     paths = filedialog.askopenfilenames(
         title="Select video file(s)",
         filetypes=[("Video files", ('.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.mpeg', '.mpg', 'm4v'))],
@@ -873,7 +943,8 @@ if __name__ == '__main__':
                 en_subtitle_path = translate_subtitle_parallel(jp_subtitle_path)
 
                 # Get the OCR object to merge into the final subtitle file
-                ocr_data = ocr_video(video_path)
+                ocr_data = []
+                #ocr_data = ocr_video(video_path)
 
                 # Combine subtitle and ocr data, and write to Final ass subtitle file
                 combine_and_write_to_ass_file(video_path, en_subtitle_path, ocr_data)

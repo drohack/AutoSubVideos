@@ -111,7 +111,7 @@ try:
 
     print_with_timestamp("Temporary audio file saved:" + temp_audio_file_path)
 
-
+    '''
     print_with_timestamp("Reduce audio start")
     reduce_audio_file_path = os.path.join(temp_dir, "temp_reduced_audio.wav")
     df_model, df_state, _ = init_df()
@@ -122,13 +122,13 @@ try:
     # Clear GPU memory
     torch.cuda.empty_cache()
     print_with_timestamp("Reduce audio end")
-
+    '''
 
     directory_path = os.path.dirname(video_path)
     jp_subtitle_path = directory_path + "/" + os.path.splitext(os.path.basename(video_path))[0]
 
     # Generate .srt file from audio file
-    transcribe_audio(reduce_audio_file_path, jp_subtitle_path)
+    transcribe_audio(temp_audio_file_path, jp_subtitle_path)
 
     '''
     # Write transcription to .srt file

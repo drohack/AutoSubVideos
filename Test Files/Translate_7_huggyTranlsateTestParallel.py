@@ -5,6 +5,7 @@ import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from tqdm import tqdm
 from tkinter import filedialog
+import pysrt
 
 
 def clean_up_line(line: str) -> str:
@@ -15,16 +16,17 @@ def clean_up_line(line: str) -> str:
     return line
 
 
-def translate_line(line: str, tokenizer, model, device, pbar) -> str:
-    encoded_text = tokenizer(line, return_tensors="pt")
+def translate_line(sub, tokenizer, model, device, pbar) -> str:
+    encoded_text = tokenizer(sub.text, return_tensors="pt")
     # Run on GPU if available
     encoded_text = encoded_text.to(device)
 
     translated_text = model.generate(**encoded_text)[0]
     translated_sentence = tokenizer.decode(translated_text, skip_special_tokens=True)
+    sub.text = translated_sentence
 
     pbar.update(1)
-    return translated_sentence
+    return sub
 
 
 def update_pbar(pbar, future):
@@ -45,35 +47,18 @@ def translate_subtitle_parallel(subtitle_file, output_file_path):
     model = model.to(device)
 
     # Read subtitle file
-    with open(subtitle_file, 'r', encoding='utf-8') as file:
-        subtitle_lines = file.readlines()
-
-    # Get only the text lines, every 4th line starting at the 3rd line
-    text_lines = subtitle_lines[2::4]
-
-    for line in text_lines:
-        line = clean_up_line(line)
+    subs = pysrt.open(subtitle_file)
 
     # Initialize concurrent futures executor
     num_workers = 4  # Number of parallel workers
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        translated_lines = []
-
         # Create a tqdm progress bar to track the number of translated lines
-        with tqdm(total=len(text_lines), unit="line", position=0, leave=True) as pbar:
+        with tqdm(total=len(subs), unit="line", position=0, leave=True) as pbar:
             # Use ThreadPoolExecutor.map to process tasks in order
-            translated_lines = list(executor.map(lambda line: translate_line(line, tokenizer, model, device, pbar), text_lines))
+            list(executor.map(lambda sub: translate_line(sub, tokenizer, model, device, pbar), subs))
 
-    # Replace the japanese lines with the translated lines (this keeps the index, and timestamps)
-    subtitle_lines[2::4] = translated_lines
-
-    # Write translated lines to the output SRT file
-    with open(output_file_path, 'w', encoding='utf-8') as f:
-        for line in subtitle_lines:
-            if line.endswith('\n'):
-                f.write(line)
-            else:
-                f.write(line + '\n')
+    # Save the filtered subtitles to a new SRT file
+    subs.save(output_file_path, encoding='utf-8')
 
 
 def create_empty_srt_file(file_path):
